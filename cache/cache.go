@@ -84,14 +84,3 @@ type BoolCmd struct {
 func (cmd *BoolCmd) Val() bool {
 	return cmd.value
 }
-
-//type Store interface {
-//	Load(key string) (value interface{}, ok bool, err error)
-//	Store(key string, value interface{}) error
-//	Delete(key string) error
-//	LoadOrStore(key string, value interface{}) (actual interface{}, loaded bool)
-//	Exists(key string) bool
-//	Range(f func(k string, v interface{}) bool)
-//	FlushAll() error
-//	Close() error
-//}
