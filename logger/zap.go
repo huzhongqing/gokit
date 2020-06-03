@@ -23,7 +23,7 @@ func init() {
 	var coreTree zapcore.Core
 	infoCfg := DefaultWriteConfig()
 	infoCfg.Filename = "./log/info_logger.log"
-	infoEnc := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
+	infoEnc := zapcore.NewJSONEncoder(zap.NewDevelopmentEncoderConfig())
 	infoLevel := level{
 		lowestLevel:  zapcore.DebugLevel,
 		highestLevel: zapcore.InfoLevel,
@@ -32,7 +32,7 @@ func init() {
 
 	errCfg := DefaultWriteConfig()
 	errCfg.Filename = "./log/err_logger.log"
-	errEnc := zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig())
+	errEnc := zapcore.NewJSONEncoder(zap.NewDevelopmentEncoderConfig())
 	errLevel := level{
 		lowestLevel:  zapcore.WarnLevel,
 		highestLevel: zapcore.FatalLevel,
