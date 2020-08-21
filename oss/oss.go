@@ -12,4 +12,5 @@ type Operation interface {
 	Bucket() string
 	Domain() string
 	URL(key string) string
+	Token() string
 }

@@ -42,6 +42,11 @@ func TestNewQiNiuOSS_Put(t *testing.T) {
 	}
 }
 
+func TestQiNiuOSS_Token(t *testing.T) {
+	oss := NewQiNiuOSS(ak, sk, domain, bucket)
+	t.Log(oss.Token())
+}
+
 func TestQiNiuOSS_URL(t *testing.T) {
 	oss := NewQiNiuOSS(ak, sk, domain, bucket)
 	t.Log(oss.URL("test.docx"))

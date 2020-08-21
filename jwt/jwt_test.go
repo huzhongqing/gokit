@@ -9,6 +9,7 @@ import (
 type CustomData struct {
 	User     string `json:"user"`
 	Password string `json:"password"`
+	Value    int64
 }
 
 func TestGenerateJWTToken(t *testing.T) {
@@ -46,6 +47,7 @@ func TestGetCustomData(t *testing.T) {
 	data := CustomData{
 		User:     "test",
 		Password: "123456",
+		Value:    time.Now().UnixNano(),
 	}
 	claims := NewCustomClaims(data, 5*time.Second)
 

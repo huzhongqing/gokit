@@ -71,6 +71,15 @@ func (oss *QiNiuOSS) Base64Put(ctx context.Context, key string, raw []byte, mime
 	return err
 }
 
+func (oss *QiNiuOSS) Token() string {
+	putPolicy := storage.PutPolicy{
+		Scope:   fmt.Sprintf("%s", oss.bucket),
+		Expires: 3600,
+	}
+	upToken := putPolicy.UploadToken(auth.New(oss.accessKey, oss.secretKey))
+	return upToken
+}
+
 func (oss *QiNiuOSS) Delete(key string) error {
 	cfg := storage.Config{
 		ApiHost: storage.DefaultAPIHost,
