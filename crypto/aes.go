@@ -4,19 +4,18 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"encoding/base64"
 	"errors"
 	"fmt"
 )
 
-func AESEncryptCBC(key, iv []byte, origData []byte) (string, error) {
+func AESEncryptCBC(key, iv []byte, origData []byte) ([]byte, error) {
 	if len(iv) < 16 {
-		return "", fmt.Errorf("iv length must lte 16")
+		return nil, fmt.Errorf("iv length must lte 16")
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	blockSize := block.BlockSize()
@@ -24,33 +23,28 @@ func AESEncryptCBC(key, iv []byte, origData []byte) (string, error) {
 	origData = PKCS7Padding(origData, blockSize)
 
 	blockMode := cipher.NewCBCEncrypter(block, iv)
-	crypted := make([]byte, len(origData))
+	encrypted := make([]byte, len(origData))
 
-	blockMode.CryptBlocks(crypted, origData)
+	blockMode.CryptBlocks(encrypted, origData)
 
-	return base64.StdEncoding.EncodeToString(crypted), nil
+	return encrypted, nil
 
 }
 
-func AESDecryptCBC(key, iv []byte, crypted string) (string, error) {
+func AESDecryptCBC(key, iv, encrypted []byte) ([]byte, error) {
 	if len(iv) < 16 {
-		return "", fmt.Errorf("iv length must lte 16")
-	}
-
-	decodeData, err := base64.StdEncoding.DecodeString(crypted)
-	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("iv length must lte 16")
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	blockSize := block.BlockSize()
 	iv = iv[:blockSize]
 
 	blockMode := cipher.NewCBCDecrypter(block, iv)
-	origData := make([]byte, len(decodeData))
+	origData := make([]byte, len(encrypted))
 
 	defer func() {
 		e := recover()
@@ -59,11 +53,11 @@ func AESDecryptCBC(key, iv []byte, crypted string) (string, error) {
 		}
 	}()
 
-	blockMode.CryptBlocks(origData, decodeData)
+	blockMode.CryptBlocks(origData, encrypted)
 
 	origData, err = UnPadding(origData)
 
-	return string(origData), err
+	return origData, err
 }
 
 func PKCS7Padding(ciphertext []byte, blockSize int) []byte {
