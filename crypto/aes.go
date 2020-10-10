@@ -8,10 +8,16 @@ import (
 	"fmt"
 )
 
-func AESEncryptCBC(key, iv []byte, origData []byte) ([]byte, error) {
+func AESEncryptCBC(key, iv []byte, origData []byte) (encrypted []byte, err error) {
 	if len(iv) < 16 {
 		return nil, fmt.Errorf("iv length must lte 16")
 	}
+	defer func() {
+		e := recover()
+		if e != nil {
+			err = fmt.Errorf("EncryptCBC %v", e)
+		}
+	}()
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -23,7 +29,7 @@ func AESEncryptCBC(key, iv []byte, origData []byte) ([]byte, error) {
 	origData = PKCS7Padding(origData, blockSize)
 
 	blockMode := cipher.NewCBCEncrypter(block, iv)
-	encrypted := make([]byte, len(origData))
+	encrypted = make([]byte, len(origData))
 
 	blockMode.CryptBlocks(encrypted, origData)
 
@@ -31,10 +37,17 @@ func AESEncryptCBC(key, iv []byte, origData []byte) ([]byte, error) {
 
 }
 
-func AESDecryptCBC(key, iv, encrypted []byte) ([]byte, error) {
+func AESDecryptCBC(key, iv, encrypted []byte) (origData []byte, err error) {
 	if len(iv) < 16 {
 		return nil, fmt.Errorf("iv length must lte 16")
 	}
+
+	defer func() {
+		e := recover()
+		if e != nil {
+			err = fmt.Errorf("DecryptCBC %v", e)
+		}
+	}()
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -44,17 +57,9 @@ func AESDecryptCBC(key, iv, encrypted []byte) ([]byte, error) {
 	iv = iv[:blockSize]
 
 	blockMode := cipher.NewCBCDecrypter(block, iv)
-	origData := make([]byte, len(encrypted))
-
-	defer func() {
-		e := recover()
-		if e != nil {
-			err = fmt.Errorf("CryptBlocks %v", e)
-		}
-	}()
+	origData = make([]byte, len(encrypted))
 
 	blockMode.CryptBlocks(origData, encrypted)
-
 	origData, err = UnPadding(origData)
 
 	return origData, err
