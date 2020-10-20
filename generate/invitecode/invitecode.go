@@ -23,8 +23,8 @@ func Encode(id uint64) string {
 	if len(res) < baseLen {
 		res += basePad
 		l := len(res)
+		rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100000)))
 		for i := 0; i < baseLen-l; i++ {
-			rand.Seed(time.Now().UnixNano() + int64(rand.Intn(100000)))
 			res += string(baseChar[rand.Intn(int(baseDecimal))])
 		}
 	}

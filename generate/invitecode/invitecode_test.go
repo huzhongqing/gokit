@@ -7,18 +7,18 @@ import (
 )
 
 func TestEncode(t *testing.T) {
-	uid := uint64(39)
+	uid := uint64(18739)
 	fmt.Println(Encode(uid))
 }
 
 func TestDecode(t *testing.T) {
-	code := "82FHDW"
+	code := "MALF73"
 	fmt.Println(Decode(code))
 }
 
 func TestEncodeAndDecode(t *testing.T) {
 	s := time.Now()
-	count := 100000000
+	count := 1000000
 	existsMap := map[string]bool{}
 	for count > 0 {
 		count--
