@@ -3,12 +3,14 @@ package cache
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,27 +27,30 @@ var (
 )
 
 type Options struct {
-	// 缓存容量， 默认 -1  不限制
-	Capacity int
+	// 缓存容量， 默认 -1  不限制  byte
+	Size int32
+	// 自动清除, 当ttl key存在不多时，可以关闭，默认关闭
+	AutoClean bool
 	// 保存文件位置, 默认 不设置，不能 Save
 	Filename string
-	// 自动清除, 当ttl key存在不多时，可以关闭，默认开启
-	AutoClean bool
 }
 
 func NewDefaultOptions() Options {
 	return Options{
-		Capacity: -1,
-		Filename: "",
+		Size:      -1,
+		AutoClean: false,
+		Filename:  "",
 	}
 }
 
 type MemCache struct {
 	rwMutex sync.RWMutex
-	store   map[string]interface{}
+	store   map[string]WrapValue
 
 	// 缓存容量， -1 - 不限制
-	capacity int
+	size        int32
+	currentSize int32
+
 	// 保存文件位置, 不设置，默认当前执行路径
 	filename string
 	// 自动清除
@@ -58,14 +63,15 @@ func NewMemCache(opts ...Options) *MemCache {
 		opt = opts[0]
 	}
 	mem := &MemCache{
-		store:     make(map[string]interface{}),
-		capacity:  opt.Capacity,
-		filename:  opt.Filename,
-		autoClean: opt.AutoClean,
+		store:       make(map[string]WrapValue),
+		size:        opt.Size,
+		currentSize: 0,
+		filename:    opt.Filename,
+		autoClean:   opt.AutoClean,
 	}
 
 	if mem.autoClean {
-		go mem.autoExpireClean(10 * time.Minute)
+		go mem.autoExpireClean(5 * time.Minute)
 	}
 
 	if err := mem.load(); err != nil {
@@ -75,12 +81,13 @@ func NewMemCache(opts ...Options) *MemCache {
 	return mem
 }
 
-type ttlValue struct {
+type WrapValue struct {
 	Value       interface{} `json:"v"`
 	ExpiredTime time.Time   `json:"e"`
+	Size        int32       `json:"s"`
 }
 
-func (val *ttlValue) SetExpiredTime(t time.Duration) {
+func (val *WrapValue) SetExpiredTime(t time.Duration) {
 	if t <= -1 {
 		val.ExpiredTime = time.Now().AddDate(100, 0, 0)
 		return
@@ -88,7 +95,7 @@ func (val *ttlValue) SetExpiredTime(t time.Duration) {
 	val.ExpiredTime = time.Now().Add(t)
 }
 
-func (val *ttlValue) TTL() time.Duration {
+func (val *WrapValue) TTL() time.Duration {
 	expire := val.ExpiredTime.Sub(time.Now())
 	// 存在这种可能
 	if expire < 0 {
@@ -97,22 +104,18 @@ func (val *ttlValue) TTL() time.Duration {
 	return expire
 }
 
-func (val *ttlValue) Expired() bool {
+func (val *WrapValue) Expired() bool {
 	return val.ExpiredTime.Before(time.Now())
 }
 
 func (mem *MemCache) Get(key string) *Cmd {
 	mem.rwMutex.RLock()
-	defer mem.rwMutex.RUnlock()
-
-	v, ok := mem.store[key]
+	val, ok := mem.store[key]
+	mem.rwMutex.RUnlock()
 	if ok {
-		val := v.(ttlValue)
 		// 如果过期了，就删除了
 		if val.Expired() {
-			mem.rwMutex.Lock()
-			delete(mem.store, key)
-			mem.rwMutex.Unlock()
+			mem.delete(key, val)
 			return &Cmd{baseCmd: baseCmd{exists: false, ttl: val.TTL()}, value: nil}
 		}
 
@@ -122,25 +125,45 @@ func (mem *MemCache) Get(key string) *Cmd {
 }
 
 func (mem *MemCache) Set(key string, value interface{}, ttl time.Duration) *StatusCmd {
-	mem.rwMutex.Lock()
-	defer mem.rwMutex.Unlock()
-	if err := mem.isOverCapacity(); err != nil {
-		return &StatusCmd{baseCmd: baseCmd{err: err}}
-	}
-	val := ttlValue{
+	val := WrapValue{
 		Value: value,
 	}
+	if mem.size > 0 {
+		val.Size = int32(len(key) + len(fmt.Sprint(value)))
+	}
 	val.SetExpiredTime(ttl)
-	mem.store[key] = val
+	if err := mem.isOverCapacity(val.Size); err != nil {
+		return &StatusCmd{baseCmd: baseCmd{err: err}}
+	}
+
+	mem.set(key, val)
+
 	return &StatusCmd{baseCmd: baseCmd{exists: true, ttl: val.TTL()}, value: StatusOK}
 }
 
-func (mem *MemCache) Delete(key string) *StatusCmd {
+func (mem *MemCache) set(key string, val WrapValue) {
+	atomic.AddInt32(&mem.currentSize, val.Size)
 	mem.rwMutex.Lock()
-	defer mem.rwMutex.Unlock()
+	mem.store[key] = val
+	mem.rwMutex.Unlock()
+}
 
-	delete(mem.store, key)
+func (mem *MemCache) Delete(key string) *StatusCmd {
+	mem.rwMutex.RLock()
+	val, ok := mem.store[key]
+	if ok {
+		mem.rwMutex.RUnlock()
+		mem.delete(key, val)
+	}
+	mem.rwMutex.RUnlock()
 	return &StatusCmd{value: StatusOK}
+}
+
+func (mem *MemCache) delete(key string, val WrapValue) {
+	mem.rwMutex.Lock()
+	delete(mem.store, key)
+	atomic.AddInt32(&mem.currentSize, -val.Size)
+	mem.rwMutex.Unlock()
 }
 
 func (mem *MemCache) Keys(prefix string) *SliceStringCmd {
@@ -159,39 +182,52 @@ func (mem *MemCache) Keys(prefix string) *SliceStringCmd {
 func (mem *MemCache) FlushAll() *StatusCmd {
 	mem.rwMutex.Lock()
 	defer mem.rwMutex.Unlock()
-	mem.store = make(map[string]interface{})
+	mem.store = make(map[string]WrapValue)
+	mem.currentSize = 0
 	return &StatusCmd{value: StatusOK}
 }
 
 // Close 开启写入磁盘，则写入文件
 func (mem *MemCache) Close() error {
+	if mem.filename != "" {
+		saveCmd := mem.Save()
+		if saveCmd.Error() != nil {
+			return saveCmd.Error()
+		}
+	}
 	return nil
 }
 
-func (mem *MemCache) isOverCapacity() error {
-	if mem.Capacity == -1 {
+func (mem *MemCache) isOverCapacity(size int32) error {
+	if mem.size <= 0 {
 		return nil
 	}
-	if len(mem.store) >= mem.Capacity {
-		delCount := mem.expireClean()
-		if delCount <= 0 {
-			return ErrKeysOverCapacity
-		}
+
+	if atomic.LoadInt32(&mem.currentSize)+size > mem.size {
+		return ErrKeysOverCapacity
 	}
 	return nil
 }
 
-// 在超量后，才执行此函数
-func (mem *MemCache) expireClean() int {
-	delCount := 0
+func (mem *MemCache) scanExpiredKeyAndDel() {
+	mem.rwMutex.RLock()
+	dels := make([]struct {
+		Key string
+		Val WrapValue
+	}, 0)
 	for k, v := range mem.store {
-		val := v.(ttlValue)
-		if val.Expired() {
-			delete(mem.store, k)
-			delCount++
+		if v.Expired() {
+			dels = append(dels, struct {
+				Key string
+				Val WrapValue
+			}{Key: k, Val: v})
 		}
 	}
-	return delCount
+	mem.rwMutex.RUnlock()
+
+	for _, del := range dels {
+		mem.delete(del.Key, del.Val)
+	}
 }
 
 // autoExpireClean 自动在一定时间内清理过期key
@@ -203,19 +239,17 @@ func (mem *MemCache) autoExpireClean(interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			mem.rwMutex.Lock()
-			mem.expireClean()
-			mem.rwMutex.Unlock()
+			mem.scanExpiredKeyAndDel()
 		}
 	}
 }
 
 func (mem *MemCache) Save() *StatusCmd {
-	if mem.Filename == "" {
+	if mem.filename == "" {
 		return &StatusCmd{baseCmd: baseCmd{err: ErrFilenameEmpty}}
 	}
 
-	disk, err := NewDisk(mem.Filename)
+	disk, err := NewDisk(mem.filename)
 	if err != nil {
 		return &StatusCmd{baseCmd: baseCmd{err: err}}
 	}
@@ -230,11 +264,11 @@ func (mem *MemCache) Save() *StatusCmd {
 }
 
 func (mem *MemCache) load() error {
-	if mem.Filename == "" {
+	if mem.filename == "" {
 		return nil
 	}
-	values := make(map[string]ttlValue, 0)
-	disk, err := NewDisk(mem.Filename)
+	values := make(map[string]WrapValue, 0)
+	disk, err := NewDisk(mem.filename)
 	if err != nil {
 		return err
 	}
@@ -249,12 +283,10 @@ func (mem *MemCache) load() error {
 	if err := json.Unmarshal(byt, &values); err != nil {
 		return err
 	}
-	mem.rwMutex.Lock()
-	defer mem.rwMutex.Unlock()
 
 	for k, v := range values {
 		if !v.Expired() {
-			mem.store[k] = v
+			mem.set(k, v)
 		}
 	}
 	return nil

@@ -36,7 +36,6 @@ func newIClient(addr, password string) *iClient {
 		Addr:     addr,
 		Password: password,
 	})
-	rCli.Keys()
 	rLock := redislock.New(rCli)
 	return &iClient{
 		lockClient: rLock,
