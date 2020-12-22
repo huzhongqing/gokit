@@ -115,8 +115,8 @@ func (mem *MemCache) Get(key string) *Cmd {
 	if ok {
 		// 如果过期了，就删除了
 		if val.Expired() {
-			mem.delete(key, val)
-			return &Cmd{baseCmd: baseCmd{exists: false, ttl: val.TTL()}, value: nil}
+			mem.delete(key, true)
+			return &Cmd{baseCmd: baseCmd{exists: false}, value: nil}
 		}
 
 		return &Cmd{baseCmd: baseCmd{exists: ok, ttl: val.TTL()}, value: val.Value}
@@ -132,37 +132,56 @@ func (mem *MemCache) Set(key string, value interface{}, ttl time.Duration) *Stat
 		val.Size = int32(len(key) + len(fmt.Sprint(value)))
 	}
 	val.SetExpiredTime(ttl)
-	if err := mem.isOverCapacity(val.Size); err != nil {
-		return &StatusCmd{baseCmd: baseCmd{err: err}}
-	}
 
-	mem.set(key, val)
+	if err := mem.set(key, val); err != nil {
+		return &StatusCmd{baseCmd: baseCmd{exists: false, err: err}}
+	}
 
 	return &StatusCmd{baseCmd: baseCmd{exists: true, ttl: val.TTL()}, value: StatusOK}
 }
 
-func (mem *MemCache) set(key string, val WrapValue) {
-	atomic.AddInt32(&mem.currentSize, val.Size)
+func (mem *MemCache) set(key string, val WrapValue) error {
 	mem.rwMutex.Lock()
+	addSize := int32(0)
+	oldVal, ok := mem.store[key]
+	if !ok {
+		if err := mem.isOverSize(val.Size); err != nil {
+			return err
+		}
+		addSize = val.Size
+	} else {
+		// 存在则计算容量
+		subSize := val.Size - oldVal.Size
+		if err := mem.isOverSize(subSize); err != nil {
+			return err
+		}
+		addSize = subSize
+	}
 	mem.store[key] = val
+
+	atomic.AddInt32(&mem.currentSize, addSize)
+
 	mem.rwMutex.Unlock()
+
+	return nil
 }
 
 func (mem *MemCache) Delete(key string) *StatusCmd {
-	mem.rwMutex.RLock()
-	val, ok := mem.store[key]
-	if ok {
-		mem.rwMutex.RUnlock()
-		mem.delete(key, val)
-	}
-	mem.rwMutex.RUnlock()
+	mem.delete(key, false)
 	return &StatusCmd{value: StatusOK}
 }
 
-func (mem *MemCache) delete(key string, val WrapValue) {
+func (mem *MemCache) delete(key string, isExpired bool) {
 	mem.rwMutex.Lock()
-	delete(mem.store, key)
-	atomic.AddInt32(&mem.currentSize, -val.Size)
+	val, ok := mem.store[key]
+	if ok {
+		if (isExpired && val.Expired()) || !isExpired {
+			// 过期删除，并且确实过期，才删除
+			// 非过期删除，则直接删除
+			delete(mem.store, key)
+			atomic.AddInt32(&mem.currentSize, -val.Size)
+		}
+	}
 	mem.rwMutex.Unlock()
 }
 
@@ -198,7 +217,7 @@ func (mem *MemCache) Close() error {
 	return nil
 }
 
-func (mem *MemCache) isOverCapacity(size int32) error {
+func (mem *MemCache) isOverSize(size int32) error {
 	if mem.size <= 0 {
 		return nil
 	}
@@ -226,7 +245,7 @@ func (mem *MemCache) scanExpiredKeyAndDel() {
 	mem.rwMutex.RUnlock()
 
 	for _, del := range dels {
-		mem.delete(del.Key, del.Val)
+		mem.delete(del.Key, true)
 	}
 }
 
